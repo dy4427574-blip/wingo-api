@@ -1,48 +1,11 @@
 const express = require("express");
-const bodyParser = require("body-parser");
-const axios = require("axios");
-
 const app = express();
-app.use(bodyParser.json());
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+app.use(express.json());
 
 let history = [];
 
-/* ========= PREDICTION LOGIC ========= */
-
-function predictNext() {
-  if (history.length < 5) {
-    return {
-      number: 5,
-      size: "Big",
-      color: "Green"
-    };
-  }
-
-  let last = history.slice(-10);
-
-  let big = last.filter(n => n >= 5).length;
-  let small = last.filter(n => n < 5).length;
-
-  let predictionNumber;
-
-  if (big > small) {
-    predictionNumber = Math.floor(Math.random() * 5);
-  } else {
-    predictionNumber = Math.floor(Math.random() * 5) + 5;
-  }
-
-  return {
-    number: predictionNumber,
-    size: predictionNumber >= 5 ? "Big" : "Small",
-    color: predictionNumber % 2 === 0 ? "Red" : "Green"
-  };
-}
-
-/* ========= ADD RESULT ========= */
-
+// Add Result API
 app.post("/add-result", (req, res) => {
   const { number } = req.body;
 
@@ -50,49 +13,60 @@ app.post("/add-result", (req, res) => {
     return res.status(400).json({ error: "Number required" });
   }
 
-  history.push(Number(number));
+  const size = number >= 5 ? "Big" : "Small";
+  const color = number % 2 === 0 ? "Red" : "Green";
+
+  history.push({ number, size, color });
 
   if (history.length > 100) {
     history.shift();
   }
 
+  res.json({ message: "Result added", totalStored: history.length });
+});
+
+// Prediction Logic
+app.get("/predict", (req, res) => {
+  if (history.length < 5) {
+    return res.json({ error: "Not enough data" });
+  }
+
+  let last5 = history.slice(-5);
+
+  let bigCount = last5.filter(r => r.size === "Big").length;
+  let smallCount = last5.filter(r => r.size === "Small").length;
+
+  let greenCount = last5.filter(r => r.color === "Green").length;
+  let redCount = last5.filter(r => r.color === "Red").length;
+
+  let predictedSize = smallCount > bigCount ? "Big" : "Small";
+  let predictedColor = greenCount > redCount ? "Red" : "Green";
+
+  let predictedNumber;
+
+  if (predictedSize === "Big") {
+    predictedNumber = Math.floor(Math.random() * 5) + 5; // 5-9
+  } else {
+    predictedNumber = Math.floor(Math.random() * 5); // 0-4
+  }
+
   res.json({
-    message: "Result stored",
-    total: history.length
+    prediction: {
+      number: predictedNumber,
+      size: predictedSize,
+      color: predictedColor
+    },
+    analysis: {
+      last5,
+      bigCount,
+      smallCount,
+      greenCount,
+      redCount
+    }
   });
 });
 
-/* ========= GET PREDICTION ========= */
-
-app.get("/predict", (req, res) => {
-  res.json(predictNext());
-});
-
-/* ========= TELEGRAM WEBHOOK ========= */
-
-app.post("/webhook", async (req, res) => {
-  const msg = req.body.message;
-
-  if (!msg || !msg.text) return res.sendStatus(200);
-
-  const chatId = msg.chat.id;
-  const text = msg.text.trim();
-
-  if (text === "/predict") {
-    const prediction = predictNext();
-
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
-      chat_id: chatId,
-      text: `🎯 Prediction:
-Number: ${prediction.number}
-Size: ${prediction.size}
-Color: ${prediction.color}`
-    });
-  }
-
-  res.sendStatus(200);
-});
-
-app.listen(3000, () => {
-  console.log("Server running...");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
 });
