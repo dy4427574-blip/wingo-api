@@ -1,122 +1,98 @@
 const express = require("express");
-const cors = require("cors");
+const bodyParser = require("body-parser");
+const axios = require("axios");
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
 
-const PORT = process.env.PORT || 3000;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// Store last 100 results
 let history = [];
 
-/*
-Result format expected:
-{
-  number: 7,
-  size: "B"  // or "S"
+/* ========= PREDICTION LOGIC ========= */
+
+function predictNext() {
+  if (history.length < 5) {
+    return {
+      number: 5,
+      size: "Big",
+      color: "Green"
+    };
+  }
+
+  let last = history.slice(-10);
+
+  let big = last.filter(n => n >= 5).length;
+  let small = last.filter(n => n < 5).length;
+
+  let predictionNumber;
+
+  if (big > small) {
+    predictionNumber = Math.floor(Math.random() * 5);
+  } else {
+    predictionNumber = Math.floor(Math.random() * 5) + 5;
+  }
+
+  return {
+    number: predictionNumber,
+    size: predictionNumber >= 5 ? "Big" : "Small",
+    color: predictionNumber % 2 === 0 ? "Red" : "Green"
+  };
 }
-*/
+
+/* ========= ADD RESULT ========= */
 
 app.post("/add-result", (req, res) => {
-  const { number, size } = req.body;
+  const { number } = req.body;
 
-  if (!number && number !== 0) {
+  if (number === undefined) {
     return res.status(400).json({ error: "Number required" });
   }
 
-  const finalSize = size || (number >= 5 ? "B" : "S");
-
-  history.unshift({
-    number: Number(number),
-    size: finalSize
-  });
+  history.push(Number(number));
 
   if (history.length > 100) {
-    history.pop();
+    history.shift();
   }
 
-  res.json({ message: "Result added", totalStored: history.length });
+  res.json({
+    message: "Result stored",
+    total: history.length
+  });
 });
 
+/* ========= GET PREDICTION ========= */
+
 app.get("/predict", (req, res) => {
-  if (history.length < 10) {
-    return res.json({
-      message: "Need at least 10 results",
-      stored: history.length
+  res.json(predictNext());
+});
+
+/* ========= TELEGRAM WEBHOOK ========= */
+
+app.post("/webhook", async (req, res) => {
+  const msg = req.body.message;
+
+  if (!msg || !msg.text) return res.sendStatus(200);
+
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
+
+  if (text === "/predict") {
+    const prediction = predictNext();
+
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text: `🎯 Prediction:
+Number: ${prediction.number}
+Size: ${prediction.size}
+Color: ${prediction.color}`
     });
   }
 
-  const last50 = history.slice(0, 50);
-
-  let bigCount = 0;
-  let smallCount = 0;
-
-  last50.forEach(r => {
-    if (r.size === "B") bigCount++;
-    else smallCount++;
-  });
-
-  const freqBig = bigCount / last50.length;
-  const freqSmall = smallCount / last50.length;
-
-  // Streak detection
-  let streakSize = history[0].size;
-  let streakCount = 1;
-
-  for (let i = 1; i < history.length; i++) {
-    if (history[i].size === streakSize) {
-      streakCount++;
-    } else break;
-  }
-
-  let streakBig = 0;
-  let streakSmall = 0;
-
-  if (streakSize === "B") {
-    streakBig = streakCount >= 3 ? 1 : 0;
-  } else {
-    streakSmall = streakCount >= 3 ? 1 : 0;
-  }
-
-  // Transition probability
-  let transBig = 0;
-  let transSmall = 0;
-
-  for (let i = 0; i < last50.length - 1; i++) {
-    if (last50[i + 1].size === "B" && last50[i].size === "B") transBig++;
-    if (last50[i + 1].size === "S" && last50[i].size === "S") transSmall++;
-  }
-
-  const transBigRatio = transBig / last50.length;
-  const transSmallRatio = transSmall / last50.length;
-
-  const scoreBig =
-    freqBig * 0.4 +
-    streakSmall * 0.3 +
-    transBigRatio * 0.3;
-
-  const scoreSmall =
-    freqSmall * 0.4 +
-    streakBig * 0.3 +
-    transSmallRatio * 0.3;
-
-  const prediction = scoreBig > scoreSmall ? "BIG" : "SMALL";
-
-  const confidence = Math.abs(scoreBig - scoreSmall) * 100;
-
-  res.json({
-    prediction,
-    confidence: confidence.toFixed(2) + "%",
-    bigScore: scoreBig.toFixed(3),
-    smallScore: scoreSmall.toFixed(3)
-  });
+  res.sendStatus(200);
 });
 
-app.get("/", (req, res) => {
-  res.send("Auto Hybrid Prediction Engine Running");
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(3000, () => {
+  console.log("Server running...");
 });
