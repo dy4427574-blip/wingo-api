@@ -1,54 +1,62 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+const cheerio = require("cheerio");
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-/*
-  YE API external website se prediction fetch karegi
-  Aur sirf prediction output degi:
-  number
-  size
-  color
-*/
+// Root check
+app.get("/", (req, res) => {
+  res.send("Wingo Mirror API Running");
+});
 
+// Exact mirror prediction
 app.get("/prediction", async (req, res) => {
   try {
     const response = await axios.get(
-      "https://wingoaisite.com/wp-json/wp/v2/posts?per_page=1"
+      "https://wingoaisite.com/wingo-prediction/",
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0"
+        }
+      }
     );
 
-    const data = response.data[0];
+    const $ = cheerio.load(response.data);
 
-    // Yaha tum future me exact parsing change kar sakte ho
-    // Abhi demo structure bana rahe hain
+    // 🔥 Yaha actual prediction text nikalna hai
+    // Ye generic extraction hai — page structure ke hisaab se adjust hoga
 
-    const title = data.title.rendered || "";
+    const pageText = $("body").text();
 
-    // Example extract logic (customize karenge baad me)
-    let number = title.match(/\d+/) ? title.match(/\d+/)[0] : "0";
+    // Number extract
+    const numberMatch = pageText.match(/\b\d\b/);
+    const number = numberMatch ? numberMatch[0] : null;
 
-    let size = parseInt(number) >= 5 ? "Big" : "Small";
+    let size = null;
+    if (number !== null) {
+      size = parseInt(number) >= 5 ? "Big" : "Small";
+    }
 
-    let color = parseInt(number) % 2 === 0 ? "Red" : "Green";
+    let color = null;
+    if (number !== null) {
+      color = parseInt(number) % 2 === 0 ? "Red" : "Green";
+    }
 
     res.json({
       number,
       size,
       color
     });
+
   } catch (error) {
     res.status(500).json({
-      error: "Failed to fetch prediction"
+      error: "Failed to mirror prediction"
     });
   }
-});
-
-app.get("/", (req, res) => {
-  res.send("Wingo API Running");
 });
 
 app.listen(PORT, () => {
