@@ -1,7 +1,11 @@
 const express = require("express");
-const app = express();
+const axios = require("axios");
 
+const app = express();
 app.use(express.json());
+
+const TOKEN = process.env.BOT_TOKEN;
+const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
 let history = [];
 
@@ -18,18 +22,14 @@ app.post("/add-result", (req, res) => {
 
   history.push({ number, size, color });
 
-  if (history.length > 100) {
-    history.shift();
-  }
+  if (history.length > 100) history.shift();
 
-  res.json({ message: "Result added", totalStored: history.length });
+  res.json({ message: "Result added" });
 });
 
 // Prediction Logic
-app.get("/predict", (req, res) => {
-  if (history.length < 5) {
-    return res.json({ error: "Not enough data" });
-  }
+function generatePrediction() {
+  if (history.length < 5) return null;
 
   let last5 = history.slice(-5);
 
@@ -42,31 +42,42 @@ app.get("/predict", (req, res) => {
   let predictedSize = smallCount > bigCount ? "Big" : "Small";
   let predictedColor = greenCount > redCount ? "Red" : "Green";
 
-  let predictedNumber;
+  let predictedNumber =
+    predictedSize === "Big"
+      ? Math.floor(Math.random() * 5) + 5
+      : Math.floor(Math.random() * 5);
 
-  if (predictedSize === "Big") {
-    predictedNumber = Math.floor(Math.random() * 5) + 5; // 5-9
-  } else {
-    predictedNumber = Math.floor(Math.random() * 5); // 0-4
+  return {
+    number: predictedNumber,
+    size: predictedSize,
+    color: predictedColor
+  };
+}
+
+// Telegram Webhook
+app.post("/", async (req, res) => {
+  const message = req.body.message;
+
+  if (message && message.text === "/predict") {
+    const chatId = message.chat.id;
+
+    const prediction = generatePrediction();
+
+    if (!prediction) {
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: "Not enough data. Add at least 5 results first."
+      });
+    } else {
+      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+        chat_id: chatId,
+        text: `🎯 Prediction:\nNumber: ${prediction.number}\nSize: ${prediction.size}\nColor: ${prediction.color}`
+      });
+    }
   }
 
-  res.json({
-    prediction: {
-      number: predictedNumber,
-      size: predictedSize,
-      color: predictedColor
-    },
-    analysis: {
-      last5,
-      bigCount,
-      smallCount,
-      greenCount,
-      redCount
-    }
-  });
+  res.sendStatus(200);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
+app.listen(PORT, () => console.log("Bot running..."));
