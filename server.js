@@ -8,76 +8,129 @@ const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
 let history = [];
+let lastPrediction = null;
 
-// Add Result API
-app.post("/add-result", (req, res) => {
-  const { number } = req.body;
+/* =========================
+   CORE ANALYSIS ENGINE
+========================= */
 
-  if (number === undefined) {
-    return res.status(400).json({ error: "Number required" });
+function analyzeAndPredict() {
+  if (history.length < 10) return null;
+
+  const last50 = history.slice(-50);
+  const last5 = history.slice(-5);
+
+  let bigCount = last50.filter(r => r.size === "B").length;
+  let smallCount = last50.length - bigCount;
+
+  let recentBig = last5.filter(r => r.size === "B").length;
+  let recentSmall = last5.length - recentBig;
+
+  // Base bias
+  let scoreBig = bigCount * 0.4 + recentBig * 0.6;
+  let scoreSmall = smallCount * 0.4 + recentSmall * 0.6;
+
+  // Streak detection
+  let streakSize = history[history.length - 1].size;
+  let streak = 1;
+
+  for (let i = history.length - 2; i >= 0; i--) {
+    if (history[i].size === streakSize) streak++;
+    else break;
   }
 
-  const size = number >= 5 ? "Big" : "Small";
-  const color = number % 2 === 0 ? "Red" : "Green";
+  if (streak >= 3) {
+    if (streakSize === "B") scoreSmall += 5;
+    else scoreBig += 5;
+  }
 
-  history.push({ number, size, color });
+  let predictedSize = scoreBig > scoreSmall ? "B" : "S";
 
-  if (history.length > 100) history.shift();
+  let predictedNumber;
+  if (predictedSize === "B") {
+    predictedNumber = Math.floor(Math.random() * 5) + 5;
+  } else {
+    predictedNumber = Math.floor(Math.random() * 5);
+  }
 
-  res.json({ message: "Result added" });
-});
+  let predictedColor = predictedNumber % 2 === 0 ? "Red" : "Green";
 
-// Prediction Logic
-function generatePrediction() {
-  if (history.length < 5) return null;
-
-  let last5 = history.slice(-5);
-
-  let bigCount = last5.filter(r => r.size === "Big").length;
-  let smallCount = last5.filter(r => r.size === "Small").length;
-
-  let greenCount = last5.filter(r => r.color === "Green").length;
-  let redCount = last5.filter(r => r.color === "Red").length;
-
-  let predictedSize = smallCount > bigCount ? "Big" : "Small";
-  let predictedColor = greenCount > redCount ? "Red" : "Green";
-
-  let predictedNumber =
-    predictedSize === "Big"
-      ? Math.floor(Math.random() * 5) + 5
-      : Math.floor(Math.random() * 5);
+  let confidence = Math.abs(scoreBig - scoreSmall).toFixed(2);
 
   return {
     number: predictedNumber,
-    size: predictedSize,
-    color: predictedColor
+    size: predictedSize === "B" ? "Big" : "Small",
+    color: predictedColor,
+    confidence: confidence
   };
 }
 
-// Telegram Webhook
+/* =========================
+   TELEGRAM WEBHOOK
+========================= */
+
 app.post("/", async (req, res) => {
   const message = req.body.message;
+  if (!message || !message.text) return res.sendStatus(200);
 
-  if (message && message.text === "/predict") {
-    const chatId = message.chat.id;
+  const chatId = message.chat.id;
+  const text = message.text.trim();
 
-    const prediction = generatePrediction();
+  // INIT MODE
+  if (text.startsWith("INIT")) {
+    history = [];
+    lastPrediction = null;
+
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text: "Send last 50 results in format:\n6B\n4S\n2S"
+    });
+
+    return res.sendStatus(200);
+  }
+
+  // RESULT FORMAT (6B type)
+  if (/^[0-9][BS]$/.test(text)) {
+    const number = parseInt(text[0]);
+    const size = text[1];
+
+    history.push({ number, size });
+
+    if (history.length > 50) history.shift();
+
+    let replyText = "";
+
+    if (lastPrediction) {
+      const win =
+        (lastPrediction.size === "Big" && size === "B") ||
+        (lastPrediction.size === "Small" && size === "S");
+
+      replyText += win ? "WIN ✅\n" : "LOSS ❌\n";
+    }
+
+    const prediction = analyzeAndPredict();
 
     if (!prediction) {
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: "Not enough data. Add at least 5 results first."
-      });
+      replyText += "Not enough data yet.";
     } else {
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
-        chat_id: chatId,
-        text: `🎯 Prediction:\nNumber: ${prediction.number}\nSize: ${prediction.size}\nColor: ${prediction.color}`
-      });
+      lastPrediction = prediction;
+      replyText += `Prediction: ${prediction.size}
+Number: ${prediction.number}
+Color: ${prediction.color}
+Confidence: ${prediction.confidence}%`;
     }
+
+    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+      chat_id: chatId,
+      text: replyText
+    });
+
+    return res.sendStatus(200);
   }
 
   res.sendStatus(200);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Bot running..."));
+app.listen(process.env.PORT || 3000, () => {
+  console.log("AI Engine Running...");
+});
