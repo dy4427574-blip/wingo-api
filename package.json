@@ -1,14 +1,15 @@
 {
   "name": "wingo-api",
   "version": "1.0.0",
-  "description": "Wingo prediction scraper API",
+  "description": "Wingo prediction proxy API",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.6.0",
-    "cheerio": "^1.0.0-rc.12",
+    "axios": "^1.6.7",
+    "cors": "^2.8.5",
     "express": "^4.18.2"
   }
 }
