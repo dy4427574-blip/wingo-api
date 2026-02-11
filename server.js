@@ -1,176 +1,141 @@
 const express = require("express");
 const axios = require("axios");
-const path = require("path");
 
 const app = express();
 app.use(express.json());
 
 const TOKEN = process.env.BOT_TOKEN;
-const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 
-// ===== In-memory store =====
-let history = [];
+let results = [];
+let wins = 0;
+let losses = 0;
 let lastPrediction = null;
 
-let stats = {
-  total: 0,
-  wins: 0,
-  losses: 0,
-  currentStreak: 0,
-  longestWin: 0,
-  longestLoss: 0
-};
+/* --------------------------
+   Basic Analysis Function
+---------------------------*/
+function analyzeData(history) {
+  let big = 0, small = 0;
+  let green = 0, red = 0;
 
-let engineConfig = {
-  streakWeight: 5,
-  momentumWeight: 0.6,
-  baseWeight: 0.4,
-  minData: 10,
-  confidenceThreshold: 55,
-  paused: false,
-  force: null // "B" | "S" | null
-};
+  history.forEach(r => {
+    let num = parseInt(r);
 
-let users = {}; // { chatId: { vip: false, banned: false } }
+    if (num >= 5) big++;
+    else small++;
 
-// ===== Core Analysis =====
-function analyze() {
-  if (engineConfig.paused) return null;
-  if (history.length < engineConfig.minData) return null;
+    if (num % 2 === 0) red++;
+    else green++;
+  });
 
-  const last50 = history.slice(-50);
-  const last5 = history.slice(-5);
+  let size = big >= small ? "Big" : "Small";
+  let color = green >= red ? "Green" : "Red";
 
-  let big = last50.filter(r => r.size === "B").length;
-  let small = last50.length - big;
+  let number = Math.floor(Math.random() * 10);
 
-  let recentBig = last5.filter(r => r.size === "B").length;
-  let recentSmall = last5.length - recentBig;
-
-  let scoreBig = big * engineConfig.baseWeight + recentBig * engineConfig.momentumWeight;
-  let scoreSmall = small * engineConfig.baseWeight + recentSmall * engineConfig.momentumWeight;
-
-  // streak
-  let streakSize = history[history.length - 1].size;
-  let streak = 1;
-  for (let i = history.length - 2; i >= 0; i--) {
-    if (history[i].size === streakSize) streak++;
-    else break;
-  }
-
-  if (streak >= 3) {
-    if (streakSize === "B") scoreSmall += engineConfig.streakWeight;
-    else scoreBig += engineConfig.streakWeight;
-  }
-
-  let predictedSize = scoreBig > scoreSmall ? "B" : "S";
-  let confidence = Math.abs(scoreBig - scoreSmall).toFixed(2);
-
-  if (engineConfig.force) predictedSize = engineConfig.force;
-
-  if (confidence < engineConfig.confidenceThreshold) return null;
-
-  let number = predictedSize === "B"
-    ? Math.floor(Math.random() * 5) + 5
-    : Math.floor(Math.random() * 5);
-
-  let color = number % 2 === 0 ? "Red" : "Green";
-
-  return {
-    size: predictedSize === "B" ? "Big" : "Small",
-    number,
-    color,
-    confidence
-  };
+  return { number, size, color };
 }
 
-// ===== Telegram Webhook =====
-app.post("/", async (req, res) => {
+/* --------------------------
+   Telegram Webhook
+---------------------------*/
+app.post(`/webhook`, async (req, res) => {
   const msg = req.body.message;
-  if (!msg || !msg.text) return res.sendStatus(200);
+  if (!msg) return res.sendStatus(200);
 
-  const chatId = msg.chat.id.toString();
-  const text = msg.text.trim();
+  const chatId = msg.chat.id;
+  const text = msg.text;
 
-  if (!users[chatId]) users[chatId] = { vip: false, banned: false };
-  if (users[chatId].banned) return res.sendStatus(200);
+  // User sends 50 results history
+  if (text.startsWith("HISTORY")) {
+    let data = text.replace("HISTORY", "").trim().split("\n");
+    results = data.slice(-50);
 
-  // Admin Telegram Commands
-  if (chatId === ADMIN_CHAT_ID) {
-    if (text === "/pause") engineConfig.paused = true;
-    if (text === "/resume") engineConfig.paused = false;
-    if (text === "/forceB") engineConfig.force = "B";
-    if (text === "/forceS") engineConfig.force = "S";
-    if (text === "/clearforce") engineConfig.force = null;
-    if (text === "/reset") {
-      history = [];
-      stats = { total:0,wins:0,losses:0,currentStreak:0,longestWin:0,longestLoss:0 };
-    }
-    if (text === "/stats") {
-      await axios.post(`${TELEGRAM_API}/sendMessage`, {
+    await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+      chat_id: chatId,
+      text: "✅ History stored (last 50 results saved)"
+    });
+  }
+
+  // Prediction
+  else if (text === "/predict") {
+    if (results.length < 5) {
+      return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
         chat_id: chatId,
-        text: `Total: ${stats.total}\nWins: ${stats.wins}\nLosses: ${stats.losses}`
+        text: "⚠️ Not enough history. Send at least 5 results."
+      });
+    }
+
+    let prediction = analyzeData(results);
+    lastPrediction = prediction;
+
+    await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+      chat_id: chatId,
+      text:
+        `🎯 Prediction:\n` +
+        `Number: ${prediction.number}\n` +
+        `Size: ${prediction.size}\n` +
+        `Color: ${prediction.color}`
+    });
+  }
+
+  // User sends next result to check win/loss
+  else if (/^[0-9]$/.test(text)) {
+    let actual = parseInt(text);
+
+    if (lastPrediction) {
+      let win = false;
+
+      if (lastPrediction.number == actual) win = true;
+
+      if (win) wins++;
+      else losses++;
+
+      results.push(actual);
+      if (results.length > 50) results.shift();
+
+      await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+        chat_id: chatId,
+        text: win ? "✅ WIN" : "❌ LOSS"
       });
     }
   }
 
-  // Result input like 6B
-  if (/^[0-9][BS]$/.test(text)) {
-    const number = parseInt(text[0]);
-    const size = text[1];
-
-    history.push({ number, size });
-    if (history.length > 50) history.shift();
-
-    if (lastPrediction) {
-      const win =
-        (lastPrediction.size === "Big" && size === "B") ||
-        (lastPrediction.size === "Small" && size === "S");
-
-      stats.total++;
-      if (win) {
-        stats.wins++;
-        stats.currentStreak++;
-        stats.longestWin = Math.max(stats.longestWin, stats.currentStreak);
-      } else {
-        stats.losses++;
-        stats.currentStreak = 0;
-      }
-    }
-
-    const prediction = analyze();
-    lastPrediction = prediction;
-
-    let reply = prediction
-      ? `Prediction: ${prediction.size}\nNumber: ${prediction.number}\nColor: ${prediction.color}\nConfidence: ${prediction.confidence}%`
-      : `No Signal`;
-
-    await axios.post(`${TELEGRAM_API}/sendMessage`, {
+  // Stats
+  else if (text === "/stats") {
+    await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       chat_id: chatId,
-      text: reply
+      text:
+        `📊 Stats:\n` +
+        `Stored Results: ${results.length}\n` +
+        `Wins: ${wins}\n` +
+        `Losses: ${losses}`
     });
   }
 
   res.sendStatus(200);
 });
 
-// ===== Web Admin Dashboard =====
+/* --------------------------
+   Admin Panel
+---------------------------*/
 app.get("/admin", (req, res) => {
-  if (req.query.key !== ADMIN_SECRET) return res.status(403).send("Forbidden");
+  if (req.query.key !== ADMIN_SECRET) {
+    return res.status(403).send("Forbidden");
+  }
 
-  res.send(`
-  <h2>Admin Panel</h2>
-  <p>Total: ${stats.total}</p>
-  <p>Wins: ${stats.wins}</p>
-  <p>Losses: ${stats.losses}</p>
-  <p>History Count: ${history.length}</p>
-  <p>Paused: ${engineConfig.paused}</p>
-  <p>Force: ${engineConfig.force || "None"}</p>
-  `);
+  res.json({
+    totalStoredResults: results.length,
+    wins,
+    losses,
+    lastPrediction
+  });
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Admin + AI System Running");
+app.get("/", (req, res) => {
+  res.send("Bot is running 🚀");
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("Server running"));
