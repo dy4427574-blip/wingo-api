@@ -4,180 +4,165 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_SECRET = process.env.ADMIN_SECRET;
+const TOKEN = process.env.BOT_TOKEN;
 
 let history = [];
 let wins = 0;
 let losses = 0;
 let lastPrediction = null;
 
-/* =========================
-   Utility Functions
-========================= */
-
-function getSize(num) {
-  return num >= 5 ? "Big" : "Small";
-}
-
-function cleanInput(text) {
-  return text
-    .split(/\s+/)
-    .map(x => x.replace(/[^\d]/g, ""))
-    .filter(x => x !== "")
-    .map(x => parseInt(x));
-}
-
-/* =========================
-   Advanced Analysis Engine
-========================= */
-
-function analyzeAdvanced(data) {
-  if (data.length < 5) return null;
-
-  let big = 0, small = 0;
-  let last10 = data.slice(-10);
-
-  // Frequency
-  data.forEach(n => {
-    if (n >= 5) big++;
-    else small++;
-  });
-
-  // Last 10 weighted
-  let lastBig = 0, lastSmall = 0;
-  last10.forEach(n => {
-    if (n >= 5) lastBig++;
-    else lastSmall++;
-  });
-
-  // Streak detection
-  let streakCount = 1;
-  for (let i = data.length - 1; i > 0; i--) {
-    if (getSize(data[i]) === getSize(data[i - 1])) {
-      streakCount++;
-    } else break;
-  }
-
-  let predictionSize;
-
-  // Reversal logic if streak >=3
-  if (streakCount >= 3) {
-    predictionSize = getSize(data[data.length - 1]) === "Big" ? "Small" : "Big";
-  }
-  // Weighted trend logic
-  else if (lastBig > lastSmall) {
-    predictionSize = "Small";
-  } else if (lastSmall > lastBig) {
-    predictionSize = "Big";
-  }
-  // Overall frequency logic
-  else {
-    predictionSize = big > small ? "Small" : "Big";
-  }
-
-  return {
-    size: predictionSize,
-    number: predictionSize === "Big"
-      ? Math.floor(Math.random() * 5) + 5
-      : Math.floor(Math.random() * 5),
-    confidence: Math.min(80, 50 + Math.abs(lastBig - lastSmall) * 5)
-  };
-}
-
-/* =========================
-   Telegram Webhook
-========================= */
-
-app.post("/webhook", async (req, res) => {
-  const msg = req.body.message;
-  if (!msg) return res.sendStatus(200);
-
-  const chatId = msg.chat.id;
-  const text = msg.text;
-
-  /* ==== ADMIN RESET ==== */
-  if (text === `/reset ${ADMIN_SECRET}`) {
-    history = [];
-    wins = 0;
-    losses = 0;
-    lastPrediction = null;
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: chatId,
-      text: "✅ System Reset Done"
-    });
-    return res.sendStatus(200);
-  }
-
-  /* ==== ADMIN STATS ==== */
-  if (text === `/admin ${ADMIN_SECRET}`) {
-    const winRate = wins + losses === 0
-      ? 0
-      : ((wins / (wins + losses)) * 100).toFixed(2);
-
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: chatId,
-      text:
-        `📊 Admin Stats\n\n` +
-        `Stored: ${history.length}\n` +
-        `Wins: ${wins}\n` +
-        `Losses: ${losses}\n` +
-        `Win Rate: ${winRate}%`
-    });
-    return res.sendStatus(200);
-  }
-
-  /* ==== MULTI RESULT INPUT ==== */
-  if (!text.startsWith("/predict")) {
-    const numbers = cleanInput(text);
-
-    if (numbers.length > 0) {
-      numbers.forEach(n => {
-        history.push(n);
-        if (history.length > 50) history.shift();
-      });
-
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+/* ===========================
+   Helper: Send Telegram Msg
+=========================== */
+async function send(chatId, text) {
+    await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
         chat_id: chatId,
-        text: `✅ ${numbers.length} results added`
-      });
+        text: text
+    });
+}
+
+/* ===========================
+   AI Analysis Logic
+=========================== */
+function analyze(data) {
+    let big = 0;
+    let small = 0;
+
+    data.forEach(n => {
+        if (n >= 5) big++;
+        else small++;
+    });
+
+    let size;
+    let confidence;
+
+    if (big > small) {
+        size = "Small"; // reversal logic
+        confidence = Math.round((big / data.length) * 100);
+    } else {
+        size = "Big";
+        confidence = Math.round((small / data.length) * 100);
     }
 
-    return res.sendStatus(200);
-  }
+    let number = size === "Big"
+        ? Math.floor(Math.random() * 5) + 5
+        : Math.floor(Math.random() * 5);
 
-  /* ==== PREDICTION ==== */
-  const prediction = analyzeAdvanced(history);
+    return { size, number, confidence };
+}
 
-  if (!prediction) {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: chatId,
-      text: "⚠️ Send at least 5 results first."
-    });
-    return res.sendStatus(200);
-  }
+/* ===========================
+   WEBHOOK
+=========================== */
+app.post("/webhook", async (req, res) => {
 
-  lastPrediction = prediction;
+    const msg = req.body.message;
+    if (!msg || !msg.text) return res.sendStatus(200);
 
-  await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    chat_id: chatId,
-    text:
-      `🎯 Prediction\n\n` +
-      `Size: ${prediction.size}\n` +
-      `Number: ${prediction.number}\n` +
-      `Confidence: ${prediction.confidence}%`
-  });
+    const chatId = msg.chat.id;
+    const text = msg.text.trim();
 
-  res.sendStatus(200);
+    /* ===== RESET ===== */
+    if (text === "/reset") {
+        history = [];
+        wins = 0;
+        losses = 0;
+        lastPrediction = null;
+        await send(chatId, "✅ History, Wins, Losses cleared successfully");
+        return res.sendStatus(200);
+    }
+
+    /* ===== STATS ===== */
+    if (text === "/stats") {
+        await send(chatId,
+            `📊 Stats\n\n` +
+            `Total Stored: ${history.length}\n` +
+            `Wins: ${wins}\n` +
+            `Losses: ${losses}`
+        );
+        return res.sendStatus(200);
+    }
+
+    /* ===== PREDICT ===== */
+    if (text === "/predict") {
+
+        if (history.length < 5) {
+            await send(chatId, "⚠ Not enough history. Send at least 5 results.");
+            return res.sendStatus(200);
+        }
+
+        lastPrediction = analyze(history);
+
+        await send(chatId,
+            `🎯 Prediction\n\n` +
+            `Size: ${lastPrediction.size}\n` +
+            `Number: ${lastPrediction.number}\n` +
+            `Confidence: ${lastPrediction.confidence}%`
+        );
+
+        return res.sendStatus(200);
+    }
+
+    /* ===== HANDLE RESULTS (Single OR Bulk) ===== */
+
+    // Extract all digits from message
+    const numbers = text.match(/\d/g);
+
+    if (numbers) {
+
+        const parsed = numbers.map(n => parseInt(n));
+
+        // If only ONE number → possible win/loss check
+        if (parsed.length === 1) {
+
+            const actual = parsed[0];
+
+            if (lastPrediction) {
+                const actualSize = actual >= 5 ? "Big" : "Small";
+
+                if (actualSize === lastPrediction.size) {
+                    wins++;
+                    await send(chatId, "✅ WIN 🎉");
+                } else {
+                    losses++;
+                    await send(chatId, "❌ LOSS");
+                }
+
+                lastPrediction = null;
+            }
+
+            history.push(actual);
+
+            if (history.length > 50)
+                history = history.slice(-50);
+
+            await send(chatId, "✔ 1 result added");
+
+            return res.sendStatus(200);
+        }
+
+        // If MULTIPLE numbers → bulk history add
+        parsed.forEach(n => history.push(n));
+
+        if (history.length > 50)
+            history = history.slice(-50);
+
+        await send(chatId, `✔ ${parsed.length} results added (Max 50 stored)`);
+
+        return res.sendStatus(200);
+    }
+
+    res.sendStatus(200);
 });
 
-/* ========================= */
-
+/* ===========================
+   ROOT CHECK
+=========================== */
 app.get("/", (req, res) => {
-  res.send("Advanced AI Bot Running 🚀");
+    res.send("Bot is running 🚀");
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Server running");
+    console.log("Server running on port " + PORT);
 });
