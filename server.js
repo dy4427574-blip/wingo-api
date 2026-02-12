@@ -6,16 +6,16 @@ app.use(express.json());
 
 const TOKEN = process.env.BOT_TOKEN;
 
-const BET_AMOUNT = 50;
-const TARGET_PROFIT = 300;
-const STOP_LOSS = -500;
+const BET = 50;
+const TARGET = 300;
+const STOPLOSS = -500;
 
 let history = [];
 let session = {
   profit: 0,
   wins: 0,
   losses: 0,
-  streakLoss: 0,
+  lossStreak: 0,
   active: true,
   lastPrediction: null
 };
@@ -28,32 +28,44 @@ async function send(chatId, text) {
   });
 }
 
-// Size helper
-function getSize(num) {
-  return num >= 5 ? "Big" : "Small";
+// Helper
+function size(n) {
+  return n >= 5 ? "BIG" : "SMALL";
 }
 
-// Smart Entry Logic
-function shouldEnter() {
-  if (history.length < 5) return false;
+// Hybrid Logic
+function hybridPrediction() {
 
-  const last4 = history.slice(-4);
-  const sizes = last4.map(getSize);
+  if (history.length < 6) return null;
 
-  // Entry only if last 4 same
-  return sizes.every(s => s === sizes[0]);
-}
+  const last6 = history.slice(-6).map(size);
+  const last15 = history.slice(-15).map(size);
 
-// Predict opposite of streak
-function predict() {
-  const lastSize = getSize(history[history.length - 1]);
-  const predictedSize = lastSize === "Big" ? "Small" : "Big";
+  // Count momentum
+  const big6 = last6.filter(x => x === "BIG").length;
+  const small6 = last6.filter(x => x === "SMALL").length;
 
-  const number = predictedSize === "Big"
-    ? Math.floor(Math.random() * 5) + 5
-    : Math.floor(Math.random() * 5);
+  const big15 = last15.filter(x => x === "BIG").length;
+  const small15 = last15.filter(x => x === "SMALL").length;
 
-  return { size: predictedSize, number };
+  // Streak check
+  let streak = 1;
+  for (let i = history.length - 1; i > 0; i--) {
+    if (size(history[i]) === size(history[i - 1])) streak++;
+    else break;
+  }
+
+  // Reversal mode (4+ streak)
+  if (streak >= 4) {
+    const last = size(history[history.length - 1]);
+    return last === "BIG" ? "SMALL" : "BIG";
+  }
+
+  // Momentum mode
+  if (big6 >= 4 && big15 / last15.length >= 0.6) return "BIG";
+  if (small6 >= 4 && small15 / last15.length >= 0.6) return "SMALL";
+
+  return null; // Skip
 }
 
 // Webhook
@@ -64,39 +76,30 @@ app.post("/webhook", async (req, res) => {
   const chatId = msg.chat.id;
   const text = msg.text.trim();
 
-  // Reset Session
+  // Reset
   if (text === "/reset") {
+    history = [];
     session = {
       profit: 0,
       wins: 0,
       losses: 0,
-      streakLoss: 0,
+      lossStreak: 0,
       active: true,
       lastPrediction: null
     };
-    history = [];
     await send(chatId, "Session Reset ✅");
     return res.sendStatus(200);
   }
 
   // Stats
   if (text === "/stats") {
-    const winRate = session.wins + session.losses === 0
-      ? 0
-      : ((session.wins / (session.wins + session.losses)) * 100).toFixed(1);
-
     await send(chatId,
-      `📊 Session Stats\n\n` +
-      `Profit: ₹${session.profit}\n` +
-      `Wins: ${session.wins}\n` +
-      `Losses: ${session.losses}\n` +
-      `Win Rate: ${winRate}%\n` +
-      `Loss Streak: ${session.streakLoss}`
+      `📊 Session\nProfit: ₹${session.profit}\nWins: ${session.wins}\nLosses: ${session.losses}\nLoss Streak: ${session.lossStreak}`
     );
     return res.sendStatus(200);
   }
 
-  // Prediction
+  // Predict
   if (text === "/predict") {
 
     if (!session.active) {
@@ -104,62 +107,59 @@ app.post("/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    if (!shouldEnter()) {
-      await send(chatId, "⚠ Skip Round (No strong streak)");
+    const prediction = hybridPrediction();
+
+    if (!prediction) {
+      await send(chatId, "⚠️ Skip");
       return res.sendStatus(200);
     }
 
-    const p = predict();
-    session.lastPrediction = p;
-
-    await send(chatId,
-      `🎯 ENTRY\n` +
-      `Size: ${p.size}\n` +
-      `Number: ${p.number}\n` +
-      `Bet: ₹${BET_AMOUNT}`
-    );
+    session.lastPrediction = prediction;
+    await send(chatId, `🎯 Prediction: ${prediction}`);
 
     return res.sendStatus(200);
   }
 
-  // Handle result input
+  // Result input
   const numbers = text.match(/\d/g);
   if (numbers) {
-    const num = parseInt(numbers[0]);
 
+    const num = parseInt(numbers[0]);
     history.push(num);
     if (history.length > 50) history = history.slice(-50);
 
     if (session.lastPrediction && session.active) {
-      const actualSize = getSize(num);
 
-      if (actualSize === session.lastPrediction.size) {
+      const actual = size(num);
+
+      if (actual === session.lastPrediction) {
         session.wins++;
-        session.profit += BET_AMOUNT;
-        session.streakLoss = 0;
+        session.profit += BET;
+        session.lossStreak = 0;
         await send(chatId, "✅ WIN");
       } else {
         session.losses++;
-        session.profit -= BET_AMOUNT;
-        session.streakLoss++;
+        session.profit -= BET;
+        session.lossStreak++;
         await send(chatId, "❌ LOSS");
       }
 
       session.lastPrediction = null;
 
-      // Stop Conditions
-      if (session.profit >= TARGET_PROFIT) {
+      // Stop conditions
+      if (session.profit >= TARGET) {
         session.active = false;
-        await send(chatId, "🎯 TARGET HIT. STOP SESSION.");
+        await send(chatId, "🎯 Target Hit. Stop.");
       }
 
-      if (session.profit <= STOP_LOSS) {
+      if (session.profit <= STOPLOSS) {
         session.active = false;
-        await send(chatId, "🚨 STOP LOSS HIT. SESSION CLOSED.");
+        await send(chatId, "🚨 Stop Loss Hit. Session Closed.");
       }
 
-      if (session.streakLoss >= 3) {
-        await send(chatId, "⚠ 3 Loss Streak. Skip Next 2 Rounds.");
+      if (session.lossStreak >= 3) {
+        session.active = false;
+        await send(chatId, "⚠️ 3 Loss Streak. Session Stopped.");
       }
     }
 
@@ -170,7 +170,7 @@ app.post("/webhook", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("Pro Session Prediction Engine Running 🚀");
+  res.send("Hybrid Big/Small Engine Running 🚀");
 });
 
 const PORT = process.env.PORT || 3000;
