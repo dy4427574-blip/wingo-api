@@ -4,83 +4,69 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-const TOKEN = process.env.BOT_TOKEN;
+const TOKEN = process.env.BOT_TOKEN; // Telegram bot token
+const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
 let history = [];
-let session = {
-  wins: 0,
-  losses: 0,
-  total: 0,
-  lossStreak: 0,
-  lastPrediction: null
-};
 
-function send(chatId, text) {
-  return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+// ---------- Prediction Function ----------
+function predictBigSmall(numbers) {
+  if (!numbers || numbers.length < 20) {
+    return { prediction: "WAIT", confidence: 0, mode: "Need more data" };
+  }
+
+  const last50 = numbers.slice(-50);
+  const mapped = last50.map(n => (n >= 5 ? "BIG" : "SMALL"));
+
+  const bigCount = mapped.filter(x => x === "BIG").length;
+  const smallCount = mapped.filter(x => x === "SMALL").length;
+
+  const last10 = mapped.slice(-10);
+  const recentBig = last10.filter(x => x === "BIG").length;
+  const recentSmall = last10.filter(x => x === "SMALL").length;
+
+  let streakSide = mapped[mapped.length - 1];
+  let streak = 1;
+  for (let i = mapped.length - 2; i >= 0; i--) {
+    if (mapped[i] === streakSide) streak++;
+    else break;
+  }
+
+  const trendScore = bigCount - smallCount;
+  const recentTrend = recentBig - recentSmall;
+
+  let prediction;
+  let mode;
+
+  if (streak >= 4) {
+    prediction = streakSide === "BIG" ? "SMALL" : "BIG";
+    mode = "Streak Reversal";
+  } else if (Math.abs(trendScore) >= 6) {
+    prediction = trendScore > 0 ? "SMALL" : "BIG";
+    mode = "Ratio Reversal";
+  } else if (recentTrend > 0) {
+    prediction = "BIG";
+    mode = "Recent Trend";
+  } else {
+    prediction = "SMALL";
+    mode = "Recent Trend";
+  }
+
+  let confidence = 50 + Math.abs(recentTrend) * 3 + Math.min(streak * 2, 10);
+  if (confidence > 78) confidence = 78;
+
+  return { prediction, confidence, mode };
+}
+
+// ---------- Send Message ----------
+async function sendMessage(chatId, text) {
+  await axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
     text
   });
 }
 
-function classify(n) {
-  return n >= 5 ? "BIG" : "SMALL";
-}
-
-function analyze() {
-  if (history.length < 20) return null;
-
-  const last20 = history.slice(-20);
-  const last10 = history.slice(-10);
-  const last5 = history.slice(-5);
-
-  const big20 = last20.filter(x => x === "BIG").length;
-  const small20 = 20 - big20;
-
-  const big10 = last10.filter(x => x === "BIG").length;
-  const small10 = 10 - big10;
-
-  let streak = 1;
-  for (let i = history.length - 1; i > 0; i--) {
-    if (history[i] === history[i - 1]) streak++;
-    else break;
-  }
-
-  let prediction;
-  let confidence = 55;
-
-  // 1️⃣ Strong streak reversal
-  if (streak >= 4) {
-    prediction = history[history.length - 1] === "BIG" ? "SMALL" : "BIG";
-    confidence = 65;
-  }
-
-  // 2️⃣ Extreme bias reversal
-  else if (big20 >= 14) {
-    prediction = "SMALL";
-    confidence = 63;
-  } else if (small20 >= 14) {
-    prediction = "BIG";
-    confidence = 63;
-  }
-
-  // 3️⃣ Strong short momentum
-  else if (big10 >= 7) {
-    prediction = "BIG";
-    confidence = 60;
-  } else if (small10 >= 7) {
-    prediction = "SMALL";
-    confidence = 60;
-  }
-
-  // 4️⃣ Mild bias fallback (almost no skip)
-  else {
-    prediction = big20 >= small20 ? "BIG" : "SMALL";
-    confidence = 56;
-  }
-
-  return { prediction, confidence };
-}
-
+// ---------- Webhook ----------
 app.post("/webhook", async (req, res) => {
   const msg = req.body.message;
   if (!msg || !msg.text) return res.sendStatus(200);
@@ -88,88 +74,51 @@ app.post("/webhook", async (req, res) => {
   const chatId = msg.chat.id;
   const text = msg.text.trim();
 
+  // Reset history
   if (text === "/reset") {
     history = [];
-    session = {
-      wins: 0,
-      losses: 0,
-      total: 0,
-      lossStreak: 0,
-      lastPrediction: null
-    };
-    await send(chatId, "Session Reset ✅");
+    await sendMessage(chatId, "History cleared ✅");
     return res.sendStatus(200);
   }
 
-  if (text === "/stats") {
-    const winRate =
-      session.total > 0
-        ? ((session.wins / session.total) * 100).toFixed(1)
-        : 0;
-
-    await send(
-      chatId,
-      `📊 Session Stats\nWins: ${session.wins}\nLosses: ${session.losses}\nWinRate: ${winRate}%\nLoss Streak: ${session.lossStreak}`
-    );
-    return res.sendStatus(200);
-  }
-
+  // Prediction command
   if (text === "/predict") {
-    const result = analyze();
+    const result = predictBigSmall(history);
 
-    if (!result) {
-      await send(chatId, "Need 20+ results");
+    if (result.prediction === "WAIT") {
+      await sendMessage(chatId, "⚠ Minimum 20 results needed");
       return res.sendStatus(200);
     }
 
-    session.lastPrediction = result.prediction;
-
-    await send(
+    await sendMessage(
       chatId,
-      `🎯 Prediction: ${result.prediction}\nConfidence: ${result.confidence}%`
+      `🎯 Prediction: ${result.prediction}
+📊 Confidence: ${result.confidence}%
+📈 Mode: ${result.mode}`
     );
 
     return res.sendStatus(200);
   }
 
-  const numberMatch = text.match(/\d/);
-  if (numberMatch) {
-    const num = parseInt(numberMatch[0]);
+  // Number input (result)
+  const num = parseInt(text);
+  if (!isNaN(num) && num >= 0 && num <= 9) {
+    history.push(num);
 
-    if (!isNaN(num) && num >= 0 && num <= 9) {
-      const type = classify(num);
-      history.push(type);
+    if (history.length > 50) history = history.slice(-50);
 
-      if (history.length > 50) history = history.slice(-50);
-
-      if (session.lastPrediction) {
-        session.total++;
-
-        if (session.lastPrediction === type) {
-          session.wins++;
-          session.lossStreak = 0;
-          await send(chatId, "✅ WIN");
-        } else {
-          session.losses++;
-          session.lossStreak++;
-          await send(chatId, "❌ LOSS");
-        }
-
-        session.lastPrediction = null;
-
-        if (session.lossStreak >= 3) {
-          await send(chatId, "⚠ 3 Loss Streak — Consider Pause");
-        }
-      }
-    }
+    await sendMessage(chatId, `Result added ✅ (Total stored: ${history.length})`);
+    return res.sendStatus(200);
   }
 
   res.sendStatus(200);
 });
 
+// ---------- Root ----------
 app.get("/", (req, res) => {
-  res.send("Low-Skip Probability Engine Running");
+  res.send("Prediction Bot Running");
 });
 
+// ---------- Start Server ----------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server Running"));
+app.listen(PORT, () => console.log("Server running"));
