@@ -1,124 +1,86 @@
-const express = require("express");
-const axios = require("axios");
+const TelegramBot = require("node-telegram-bot-api");
 
-const app = express();
-app.use(express.json());
+// 🔑 Telegram Bot Token
+const token = process.env.BOT_TOKEN || "PASTE_YOUR_TOKEN_HERE";
 
-const TOKEN = process.env.BOT_TOKEN; // Telegram bot token
-const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
+const bot = new TelegramBot(token, { polling: true });
 
+// 🧠 history store
 let history = [];
 
-// ---------- Prediction Function ----------
-function predictBigSmall(numbers) {
-  if (!numbers || numbers.length < 20) {
-    return { prediction: "WAIT", confidence: 0, mode: "Need more data" };
-  }
-
-  const last50 = numbers.slice(-50);
-  const mapped = last50.map(n => (n >= 5 ? "BIG" : "SMALL"));
-
-  const bigCount = mapped.filter(x => x === "BIG").length;
-  const smallCount = mapped.filter(x => x === "SMALL").length;
-
-  const last10 = mapped.slice(-10);
-  const recentBig = last10.filter(x => x === "BIG").length;
-  const recentSmall = last10.filter(x => x === "SMALL").length;
-
-  let streakSide = mapped[mapped.length - 1];
-  let streak = 1;
-  for (let i = mapped.length - 2; i >= 0; i--) {
-    if (mapped[i] === streakSide) streak++;
-    else break;
-  }
-
-  const trendScore = bigCount - smallCount;
-  const recentTrend = recentBig - recentSmall;
-
-  let prediction;
-  let mode;
-
-  if (streak >= 4) {
-    prediction = streakSide === "BIG" ? "SMALL" : "BIG";
-    mode = "Streak Reversal";
-  } else if (Math.abs(trendScore) >= 6) {
-    prediction = trendScore > 0 ? "SMALL" : "BIG";
-    mode = "Ratio Reversal";
-  } else if (recentTrend > 0) {
-    prediction = "BIG";
-    mode = "Recent Trend";
-  } else {
-    prediction = "SMALL";
-    mode = "Recent Trend";
-  }
-
-  let confidence = 50 + Math.abs(recentTrend) * 3 + Math.min(streak * 2, 10);
-  if (confidence > 78) confidence = 78;
-
-  return { prediction, confidence, mode };
+// 🎯 convert number → Big / Small
+function getBS(n) {
+  return n >= 5 ? "BIG" : "SMALL";
 }
 
-// ---------- Send Message ----------
-async function sendMessage(chatId, text) {
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: chatId,
-    text
-  });
+// 🧠 prediction logic
+function predict() {
+  if (history.length < 10) {
+    return "Not enough data";
+  }
+
+  let last10 = history.slice(-10);
+
+  let bigCount = last10.filter(n => n >= 5).length;
+  let smallCount = last10.filter(n => n < 5).length;
+
+  if (bigCount > smallCount) return "SMALL";
+  if (smallCount > bigCount) return "BIG";
+
+  return Math.random() > 0.5 ? "BIG" : "SMALL";
 }
 
-// ---------- Webhook ----------
-app.post("/webhook", async (req, res) => {
-  const msg = req.body.message;
-  if (!msg || !msg.text) return res.sendStatus(200);
+// 🧾 start
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, "✅ Bot ready\nSend past results (numbers)");
+});
 
-  const chatId = msg.chat.id;
+// 🔄 reset
+bot.onText(/\/reset/, (msg) => {
+  history = [];
+  bot.sendMessage(msg.chat.id, "♻️ History reset");
+});
+
+// 📊 stats
+bot.onText(/\/stats/, (msg) => {
+  let big = history.filter(n => n >= 5).length;
+  let small = history.filter(n => n < 5).length;
+
+  bot.sendMessage(
+    msg.chat.id,
+    `📊 Stats\nTotal: ${history.length}\nBIG: ${big}\nSMALL: ${small}`
+  );
+});
+
+// 📥 handle numbers (single ya multi line)
+bot.on("message", (msg) => {
   const text = msg.text.trim();
 
-  // Reset history
-  if (text === "/reset") {
-    history = [];
-    await sendMessage(chatId, "History cleared ✅");
-    return res.sendStatus(200);
+  if (text.startsWith("/")) return;
+
+  // split by space, comma, newline
+  const numbers = text
+    .split(/[\s,]+/)
+    .map(n => parseInt(n))
+    .filter(n => !isNaN(n));
+
+  if (numbers.length === 0) return;
+
+  numbers.forEach(n => {
+    history.push(n);
+    if (history.length > 50) history.shift();
+  });
+
+  bot.sendMessage(
+    msg.chat.id,
+    `✅ Result added (Total stored: ${history.length})`
+  );
+
+  const p = predict();
+
+  if (p === "Not enough data") {
+    bot.sendMessage(msg.chat.id, "⏳ Need at least 10 results");
+  } else {
+    bot.sendMessage(msg.chat.id, `🎯 Next Prediction: ${p}`);
   }
-
-  // Prediction command
-  if (text === "/predict") {
-    const result = predictBigSmall(history);
-
-    if (result.prediction === "WAIT") {
-      await sendMessage(chatId, "⚠ Minimum 20 results needed");
-      return res.sendStatus(200);
-    }
-
-    await sendMessage(
-      chatId,
-      `🎯 Prediction: ${result.prediction}
-📊 Confidence: ${result.confidence}%
-📈 Mode: ${result.mode}`
-    );
-
-    return res.sendStatus(200);
-  }
-
-  // Number input (result)
-  const num = parseInt(text);
-  if (!isNaN(num) && num >= 0 && num <= 9) {
-    history.push(num);
-
-    if (history.length > 50) history = history.slice(-50);
-
-    await sendMessage(chatId, `Result added ✅ (Total stored: ${history.length})`);
-    return res.sendStatus(200);
-  }
-
-  res.sendStatus(200);
 });
-
-// ---------- Root ----------
-app.get("/", (req, res) => {
-  res.send("Prediction Bot Running");
-});
-
-// ---------- Start Server ----------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running"));
