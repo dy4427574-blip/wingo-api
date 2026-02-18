@@ -2,7 +2,6 @@ const TelegramBot = require("node-telegram-bot-api");
 const http = require("http");
 
 const token = process.env.BOT_TOKEN;
-
 if (!token) {
   console.log("BOT_TOKEN missing");
   process.exit(1);
@@ -13,18 +12,32 @@ const bot = new TelegramBot(token, { polling: true });
 let history = [];
 
 function predict(data) {
-  if (data.length < 10) return "WAIT";
+  if (data.length < 10) return "NOT ENOUGH DATA";
 
-  let big = data.filter(n => n >= 5).length;
-  let small = data.filter(n => n < 5).length;
+  const big = data.filter(n => n >= 5).length;
+  const small = data.filter(n => n < 5).length;
 
   return big > small ? "SMALL" : "BIG";
 }
 
+// START
 bot.onText(/\/start/, msg => {
-  bot.sendMessage(msg.chat.id, "Send last results (space separated)");
+  bot.sendMessage(msg.chat.id, "Send results or use /predict");
 });
 
+// RESET
+bot.onText(/\/reset/, msg => {
+  history = [];
+  bot.sendMessage(msg.chat.id, "History cleared ✅");
+});
+
+// PREDICT
+bot.onText(/\/predict/, msg => {
+  const p = predict(history);
+  bot.sendMessage(msg.chat.id, `Prediction: ${p}`);
+});
+
+// ADD RESULTS
 bot.on("message", msg => {
   if (msg.text.startsWith("/")) return;
 
@@ -38,18 +51,13 @@ bot.on("message", msg => {
   history.push(...nums);
   history = history.slice(-50);
 
-  const p = predict(history);
-
-  bot.sendMessage(msg.chat.id, `Stored: ${history.length}\nPrediction: ${p}`);
+  bot.sendMessage(msg.chat.id, `Added ${nums.length} results ✅\nStored: ${history.length}`);
 });
 
 
-// ✅ Dummy server for Render
+// Render port fix
 const PORT = process.env.PORT || 10000;
-
 http.createServer((req, res) => {
   res.writeHead(200);
   res.end("Bot running");
-}).listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
+}).listen(PORT, () => console.log("Server running"));
