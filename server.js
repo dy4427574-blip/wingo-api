@@ -1,58 +1,43 @@
 const TelegramBot = require("node-telegram-bot-api");
 
-const token = process.env.BOT_TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+if (!process.env.BOT_TOKEN) {
+  console.log("BOT_TOKEN missing");
+  process.exit(1);
+}
+
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 let history = [];
 
-function analyzePrediction(data) {
-  if (data.length < 10) {
-    return "Not enough data";
-  }
+function predict(data) {
+  if (data.length < 10) return "WAIT";
 
-  let bigCount = 0;
-  let smallCount = 0;
+  let big = data.filter(n => n >= 5).length;
+  let small = data.filter(n => n < 5).length;
 
-  data.forEach(num => {
-    if (num >= 5) bigCount++;
-    else smallCount++;
-  });
-
-  if (bigCount > smallCount) return "SMALL";
-  if (smallCount > bigCount) return "BIG";
-
-  return Math.random() > 0.5 ? "BIG" : "SMALL";
+  return big > small ? "SMALL" : "BIG";
 }
 
 bot.onText(/\/start/, msg => {
-  bot.sendMessage(
-    msg.chat.id,
-    "✅ Bot ready\n\nSend last 50 results separated by space\nExample:\n1 4 7 3 9"
-  );
+  bot.sendMessage(msg.chat.id, "Send results (space separated)");
 });
 
 bot.on("message", msg => {
   if (msg.text.startsWith("/")) return;
 
-  const numbers = msg.text
+  const nums = msg.text
     .split(/[\s,]+/)
     .map(n => parseInt(n))
     .filter(n => !isNaN(n));
 
-  if (numbers.length === 0) return;
+  if (!nums.length) return;
 
-  numbers.forEach(n => history.push(n));
+  history.push(...nums);
+  history = history.slice(-50);
 
-  if (history.length > 50) {
-    history = history.slice(-50);
-  }
+  const p = predict(history);
 
-  const prediction = analyzePrediction(history);
-
-  bot.sendMessage(
-    msg.chat.id,
-    `📊 Total stored: ${history.length}\n🔮 Next Prediction: ${prediction}`
-  );
+  bot.sendMessage(msg.chat.id, `Stored: ${history.length}\nPrediction: ${p}`);
 });
 
-console.log("Bot running...");
+console.log("Bot running");
