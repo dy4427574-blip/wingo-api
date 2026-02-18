@@ -1,83 +1,58 @@
 const TelegramBot = require("node-telegram-bot-api");
-const http = require("http");
 
-// 🔑 TOKEN
 const token = process.env.BOT_TOKEN;
-
-if (!token) {
-  console.error("❌ BOT_TOKEN missing");
-  process.exit(1);
-}
-
 const bot = new TelegramBot(token, { polling: true });
 
-// 🧠 history
 let history = [];
 
-// 🎯 prediction
-function predict() {
-  if (history.length < 10) return null;
+function analyzePrediction(data) {
+  if (data.length < 10) {
+    return "Not enough data";
+  }
 
-  let last10 = history.slice(-10);
-  let big = last10.filter(n => n >= 5).length;
-  let small = last10.filter(n => n < 5).length;
+  let bigCount = 0;
+  let smallCount = 0;
 
-  if (big > small) return "SMALL";
-  if (small > big) return "BIG";
+  data.forEach(num => {
+    if (num >= 5) bigCount++;
+    else smallCount++;
+  });
+
+  if (bigCount > smallCount) return "SMALL";
+  if (smallCount > bigCount) return "BIG";
 
   return Math.random() > 0.5 ? "BIG" : "SMALL";
 }
 
-// /start
 bot.onText(/\/start/, msg => {
-  bot.sendMessage(msg.chat.id, "✅ Bot ready\nSend numbers");
+  bot.sendMessage(
+    msg.chat.id,
+    "✅ Bot ready\n\nSend last 50 results separated by space\nExample:\n1 4 7 3 9"
+  );
 });
 
-// /reset
-bot.onText(/\/reset/, msg => {
-  history = [];
-  bot.sendMessage(msg.chat.id, "♻️ Reset done");
-});
-
-// /stats
-bot.onText(/\/stats/, msg => {
-  let big = history.filter(n => n >= 5).length;
-  let small = history.filter(n => n < 5).length;
-
-  bot.sendMessage(msg.chat.id, `📊 Total: ${history.length}\nBIG: ${big}\nSMALL: ${small}`);
-});
-
-// numbers input
 bot.on("message", msg => {
-  const text = msg.text.trim();
-  if (text.startsWith("/")) return;
+  if (msg.text.startsWith("/")) return;
 
-  const nums = text
+  const numbers = msg.text
     .split(/[\s,]+/)
     .map(n => parseInt(n))
     .filter(n => !isNaN(n));
 
-  if (!nums.length) return;
+  if (numbers.length === 0) return;
 
-  nums.forEach(n => {
-    history.push(n);
-    if (history.length > 50) history.shift();
-  });
+  numbers.forEach(n => history.push(n));
 
-  bot.sendMessage(msg.chat.id, `✅ Added (${history.length})`);
+  if (history.length > 50) {
+    history = history.slice(-50);
+  }
 
-  const p = predict();
-  if (!p) return bot.sendMessage(msg.chat.id, "⏳ Need more data");
+  const prediction = analyzePrediction(history);
 
-  bot.sendMessage(msg.chat.id, `🎯 Prediction: ${p}`);
+  bot.sendMessage(
+    msg.chat.id,
+    `📊 Total stored: ${history.length}\n🔮 Next Prediction: ${prediction}`
+  );
 });
 
-// 🌐 web server for render
-const PORT = process.env.PORT || 3000;
-
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("Bot running");
-}).listen(PORT, () => {
-  console.log("✅ Server running on port", PORT);
-});
+console.log("Bot running...");
