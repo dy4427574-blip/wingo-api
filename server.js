@@ -1,63 +1,64 @@
-const TelegramBot = require("node-telegram-bot-api");
-const http = require("http");
+const express = require("express");
+const app = express();
 
-const token = process.env.BOT_TOKEN;
-if (!token) {
-  console.log("BOT_TOKEN missing");
-  process.exit(1);
-}
-
-const bot = new TelegramBot(token, { polling: true });
+app.use(express.json());
 
 let history = [];
 
-function predict(data) {
-  if (data.length < 10) return "NOT ENOUGH DATA";
-
-  const big = data.filter(n => n >= 5).length;
-  const small = data.filter(n => n < 5).length;
-
-  return big > small ? "SMALL" : "BIG";
+// convert number → Big Small
+function toBS(n){
+  return n >= 5 ? "BIG" : "SMALL";
 }
 
-// START
-bot.onText(/\/start/, msg => {
-  bot.sendMessage(msg.chat.id, "Send results or use /predict");
+function predict(){
+  if(history.length < 10) return "WAIT";
+
+  const last50 = history.slice(-50);
+  const last5 = history.slice(-5);
+
+  let bigCount = last50.filter(x => x === "BIG").length;
+  let smallCount = last50.length - bigCount;
+
+  let probBig = bigCount / last50.length;
+  let probSmall = smallCount / last50.length;
+
+  // streak detect
+  let streak = 1;
+  for(let i = last5.length-1; i>0; i--){
+    if(last5[i] === last5[i-1]) streak++;
+    else break;
+  }
+
+  if(streak >= 4){
+    return last5[last5.length-1] === "BIG" ? "SMALL" : "BIG";
+  }
+
+  return probBig > probSmall ? "BIG" : "SMALL";
+}
+
+// add result
+app.post("/result", (req,res)=>{
+  const num = Number(req.body.number);
+  if(isNaN(num)) return res.json({error:"invalid number"});
+
+  history.push(toBS(num));
+  if(history.length > 50) history.shift();
+
+  res.json({
+    added:true,
+    total:history.length
+  });
 });
 
-// RESET
-bot.onText(/\/reset/, msg => {
-  history = [];
-  bot.sendMessage(msg.chat.id, "History cleared ✅");
+// predict
+app.get("/predict",(req,res)=>{
+  res.json({
+    prediction: predict(),
+    stored: history.length
+  });
 });
 
-// PREDICT
-bot.onText(/\/predict/, msg => {
-  const p = predict(history);
-  bot.sendMessage(msg.chat.id, `Prediction: ${p}`);
-});
+app.get("/",(req,res)=>res.send("Wingo AI Running"));
 
-// ADD RESULTS
-bot.on("message", msg => {
-  if (msg.text.startsWith("/")) return;
-
-  const nums = msg.text
-    .split(/[\s,]+/)
-    .map(n => parseInt(n))
-    .filter(n => !isNaN(n));
-
-  if (!nums.length) return;
-
-  history.push(...nums);
-  history = history.slice(-50);
-
-  bot.sendMessage(msg.chat.id, `Added ${nums.length} results ✅\nStored: ${history.length}`);
-});
-
-
-// Render port fix
-const PORT = process.env.PORT || 10000;
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("Bot running");
-}).listen(PORT, () => console.log("Server running"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, ()=> console.log("Server running on",PORT));
