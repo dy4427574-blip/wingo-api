@@ -1,7 +1,6 @@
 {
   "name": "wingo-bot",
   "version": "1.0.0",
-  "description": "Big Small prediction bot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
