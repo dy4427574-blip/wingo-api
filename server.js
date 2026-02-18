@@ -1,84 +1,84 @@
-const TelegramBot = require("node-telegram-bot-api");
-const express = require("express");
+import logging
+from collections import deque
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
-const TOKEN = process.env.BOT_TOKEN;
-const bot = new TelegramBot(TOKEN, { polling: true });
+TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
-const app = express();
-app.use(express.json());
+data = deque(maxlen=50)
 
-let results = [];
+logging.basicConfig(level=logging.INFO)
 
-// number → BIG / SMALL
-function getType(num) {
-  return num >= 5 ? "BIG" : "SMALL";
-}
+def start(update, context):
+    update.message.reply_text(
+        "✅ Bot Ready\n\n"
+        "/import numbers\n"
+        "/add 5\n"
+        "/predict\n"
+        "/reset"
+    )
 
-// prediction logic (last 15 focus, last 7 high weight)
-function predict() {
-  if (results.length < 5) return "Not enough data";
+def reset(update, context):
+    data.clear()
+    update.message.reply_text("✅ Data reset")
 
-  let last15 = results.slice(-15);
-  let last7 = results.slice(-7);
+def import_data(update, context):
+    try:
+        nums = context.args
+        added = 0
+        for n in nums:
+            if n.isdigit() and 0 <= int(n) <= 9:
+                data.append(int(n))
+                added += 1
+        update.message.reply_text(f"✅ Imported {added} results\nStored: {len(data)}")
+    except:
+        update.message.reply_text("❌ Format: /import 1 2 3 4")
 
-  let bigScore = 0;
-  let smallScore = 0;
+def add(update, context):
+    if len(context.args) == 0:
+        update.message.reply_text("❌ Use /add number")
+        return
+    n = context.args[0]
+    if n.isdigit():
+        data.append(int(n))
+        update.message.reply_text(f"✅ Added {n}\nStored: {len(data)}")
+    else:
+        update.message.reply_text("❌ Invalid")
 
-  last15.forEach(n => {
-    if (n >= 5) bigScore += 1;
-    else smallScore += 1;
-  });
+def predict(update, context):
+    if len(data) < 10:
+        update.message.reply_text("⚠️ Need more data")
+        return
 
-  last7.forEach(n => {
-    if (n >= 5) bigScore += 2;   // high weight
-    else smallScore += 2;
-  });
+    recent = list(data)[-15:]
+    big = sum(1 for x in recent if x >= 5)
+    small = len(recent) - big
 
-  return bigScore >= smallScore ? "BIG" : "SMALL";
-}
+    if big > small:
+        result = "BIG"
+    elif small > big:
+        result = "SMALL"
+    else:
+        result = "SKIP"
 
-// command: /start
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "✅ Wingo AI Bot Active\nSend number or /predict");
-});
+    update.message.reply_text(
+        f"📊 Last 15 analysis\n"
+        f"BIG: {big}\n"
+        f"SMALL: {small}\n\n"
+        f"👉 Prediction: {result}"
+    )
 
-// command: /predict
-bot.onText(/\/predict/, (msg) => {
-  const prediction = predict();
-  bot.sendMessage(msg.chat.id, `Prediction: ${prediction}`);
-});
+def main():
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-// command: /reset
-bot.onText(/\/reset/, (msg) => {
-  results = [];
-  bot.sendMessage(msg.chat.id, "Data reset ✅");
-});
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("reset", reset))
+    dp.add_handler(CommandHandler("import", import_data))
+    dp.add_handler(CommandHandler("add", add))
+    dp.add_handler(CommandHandler("predict", predict))
 
-// receive number
-bot.on("message", (msg) => {
-  const text = msg.text;
+    updater.start_polling()
+    updater.idle()
 
-  if (!text) return;
-  if (text.startsWith("/")) return;
-
-  const num = parseInt(text);
-
-  if (!isNaN(num) && num >= 0 && num <= 9) {
-    results.push(num);
-
-    if (results.length > 50) results.shift();
-
-    bot.sendMessage(
-      msg.chat.id,
-      `Added: ${num} (${getType(num)})\nStored: ${results.length}`
-    );
-  }
-});
-
-// express server
-app.get("/", (req, res) => {
-  res.send("Wingo AI Running");
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running"));
+if __name__ == "__main__":
+    main()
