@@ -1,11 +1,14 @@
 const TelegramBot = require("node-telegram-bot-api");
+const http = require("http");
 
-if (!process.env.BOT_TOKEN) {
+const token = process.env.BOT_TOKEN;
+
+if (!token) {
   console.log("BOT_TOKEN missing");
   process.exit(1);
 }
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(token, { polling: true });
 
 let history = [];
 
@@ -19,7 +22,7 @@ function predict(data) {
 }
 
 bot.onText(/\/start/, msg => {
-  bot.sendMessage(msg.chat.id, "Send results (space separated)");
+  bot.sendMessage(msg.chat.id, "Send last results (space separated)");
 });
 
 bot.on("message", msg => {
@@ -40,4 +43,13 @@ bot.on("message", msg => {
   bot.sendMessage(msg.chat.id, `Stored: ${history.length}\nPrediction: ${p}`);
 });
 
-console.log("Bot running");
+
+// ✅ Dummy server for Render
+const PORT = process.env.PORT || 10000;
+
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("Bot running");
+}).listen(PORT, () => {
+  console.log("Server running on port " + PORT);
+});
