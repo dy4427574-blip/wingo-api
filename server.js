@@ -1,86 +1,83 @@
 const TelegramBot = require("node-telegram-bot-api");
+const http = require("http");
 
-// 🔑 Telegram Bot Token
-const token = process.env.BOT_TOKEN || "PASTE_YOUR_TOKEN_HERE";
+// 🔑 TOKEN
+const token = process.env.BOT_TOKEN;
+
+if (!token) {
+  console.error("❌ BOT_TOKEN missing");
+  process.exit(1);
+}
 
 const bot = new TelegramBot(token, { polling: true });
 
-// 🧠 history store
+// 🧠 history
 let history = [];
 
-// 🎯 convert number → Big / Small
-function getBS(n) {
-  return n >= 5 ? "BIG" : "SMALL";
-}
-
-// 🧠 prediction logic
+// 🎯 prediction
 function predict() {
-  if (history.length < 10) {
-    return "Not enough data";
-  }
+  if (history.length < 10) return null;
 
   let last10 = history.slice(-10);
+  let big = last10.filter(n => n >= 5).length;
+  let small = last10.filter(n => n < 5).length;
 
-  let bigCount = last10.filter(n => n >= 5).length;
-  let smallCount = last10.filter(n => n < 5).length;
-
-  if (bigCount > smallCount) return "SMALL";
-  if (smallCount > bigCount) return "BIG";
+  if (big > small) return "SMALL";
+  if (small > big) return "BIG";
 
   return Math.random() > 0.5 ? "BIG" : "SMALL";
 }
 
-// 🧾 start
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, "✅ Bot ready\nSend past results (numbers)");
+// /start
+bot.onText(/\/start/, msg => {
+  bot.sendMessage(msg.chat.id, "✅ Bot ready\nSend numbers");
 });
 
-// 🔄 reset
-bot.onText(/\/reset/, (msg) => {
+// /reset
+bot.onText(/\/reset/, msg => {
   history = [];
-  bot.sendMessage(msg.chat.id, "♻️ History reset");
+  bot.sendMessage(msg.chat.id, "♻️ Reset done");
 });
 
-// 📊 stats
-bot.onText(/\/stats/, (msg) => {
+// /stats
+bot.onText(/\/stats/, msg => {
   let big = history.filter(n => n >= 5).length;
   let small = history.filter(n => n < 5).length;
 
-  bot.sendMessage(
-    msg.chat.id,
-    `📊 Stats\nTotal: ${history.length}\nBIG: ${big}\nSMALL: ${small}`
-  );
+  bot.sendMessage(msg.chat.id, `📊 Total: ${history.length}\nBIG: ${big}\nSMALL: ${small}`);
 });
 
-// 📥 handle numbers (single ya multi line)
-bot.on("message", (msg) => {
+// numbers input
+bot.on("message", msg => {
   const text = msg.text.trim();
-
   if (text.startsWith("/")) return;
 
-  // split by space, comma, newline
-  const numbers = text
+  const nums = text
     .split(/[\s,]+/)
     .map(n => parseInt(n))
     .filter(n => !isNaN(n));
 
-  if (numbers.length === 0) return;
+  if (!nums.length) return;
 
-  numbers.forEach(n => {
+  nums.forEach(n => {
     history.push(n);
     if (history.length > 50) history.shift();
   });
 
-  bot.sendMessage(
-    msg.chat.id,
-    `✅ Result added (Total stored: ${history.length})`
-  );
+  bot.sendMessage(msg.chat.id, `✅ Added (${history.length})`);
 
   const p = predict();
+  if (!p) return bot.sendMessage(msg.chat.id, "⏳ Need more data");
 
-  if (p === "Not enough data") {
-    bot.sendMessage(msg.chat.id, "⏳ Need at least 10 results");
-  } else {
-    bot.sendMessage(msg.chat.id, `🎯 Next Prediction: ${p}`);
-  }
+  bot.sendMessage(msg.chat.id, `🎯 Prediction: ${p}`);
+});
+
+// 🌐 web server for render
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("Bot running");
+}).listen(PORT, () => {
+  console.log("✅ Server running on port", PORT);
 });
